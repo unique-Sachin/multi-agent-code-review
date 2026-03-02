@@ -2,7 +2,6 @@ from state import ReviewState, ReviewStateUpdate
 from llm import llm
 from models import AnalysisOutput, SecurityOutput, RefactorOutput, ReviewOutput
 from langgraph.types import interrupt
-from typing import cast
 
 
 async def analyzer_agent(state: ReviewState) -> ReviewStateUpdate:
@@ -20,7 +19,7 @@ async def analyzer_agent(state: ReviewState) -> ReviewStateUpdate:
     {state["original_code"]}
     """
 
-    result: AnalysisOutput = cast(AnalysisOutput, await structured_llm.ainvoke(prompt))
+    result = await structured_llm.ainvoke(prompt)
 
     return {
         "analysis_report": result.issues
@@ -43,7 +42,7 @@ async def security_agent(state):
     {state["original_code"]}
     """
 
-    result: SecurityOutput = cast(SecurityOutput, await structured_llm.ainvoke(prompt))
+    result = await structured_llm.ainvoke(prompt)
 
     return {
         "security_report": result.vulnerabilities
@@ -52,12 +51,20 @@ async def security_agent(state):
 
 async def refactor_agent(state):
     structured_llm = llm.with_structured_output(RefactorOutput)
+    print(state['review_feedback'])
 
     human_feedback_section = ""
     if state.get("human_feedback"):
         human_feedback_section = f"""
     Human Reviewer Feedback (must be addressed):
     {state['human_feedback']}
+"""
+
+    reviewer_feedback_section = ""
+    if state.get("review_feedback"):
+        reviewer_feedback_section = f"""
+    Automated Reviewer Feedback from previous iteration (must be addressed):
+    {state['review_feedback']}
 """
 
     prompt = f"""
@@ -71,16 +78,17 @@ async def refactor_agent(state):
 
     Security Issues:
     {state["security_report"]}
-    {human_feedback_section}
+    {human_feedback_section}{reviewer_feedback_section}
     Refactor the code to:
     - Fix all issues
     - Improve readability
     - Improve security
     - Address any human reviewer feedback
+    - Address any automated reviewer feedback
     - Keep functionality intact
     """
 
-    result: RefactorOutput = cast(RefactorOutput, await structured_llm.ainvoke(prompt))
+    result = await structured_llm.ainvoke(prompt)
 
     return {
         "refactored_code": result.refactored_code,
@@ -145,7 +153,7 @@ async def reviewer_agent(state):
     Approve only if everything is properly resolved.
     """
 
-    result: ReviewOutput = cast(ReviewOutput, await structured_llm.ainvoke(prompt))
+    result = await structured_llm.ainvoke(prompt)
 
     return {
         "approved": result.approved,

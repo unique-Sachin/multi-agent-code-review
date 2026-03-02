@@ -15,7 +15,14 @@ async def main():
     thread_config: RunnableConfig = {"configurable": {"thread_id": "review-session-1"}}
 
     initial_state: ReviewState = {
-        "original_code": "SELECT * FROM users WHERE id = " + "user_input",
+        "original_code": """def process(data):
+    if data:
+        if isinstance(data, dict):
+            if "value" in data:
+                if data["value"] > 0:
+                    print("Valid")
+                else:
+                    print("Invalid")""",
         "analysis_report": [],
         "security_report": [],
         "refactored_code": "",
@@ -27,7 +34,7 @@ async def main():
         "review_feedback": "",
         "confidence_score": 0.0,
         "iteration_count": 0,
-        "max_iterations": 2
+        "max_iterations": 3
     }
 
     # ── First run: executes until the human_review interrupt ──────────────────
