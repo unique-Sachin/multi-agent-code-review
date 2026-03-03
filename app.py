@@ -12,7 +12,7 @@ from state import ReviewState
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Multi-Agent Code Review",
+    page_title="Code Review Agent",
     page_icon="🔍",
     layout="wide",
 )

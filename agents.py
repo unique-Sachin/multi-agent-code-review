@@ -140,7 +140,6 @@ async def reviewer_agent(state):
     Verify each point specifically — if it has been resolved, do not raise it again.
     Only reject if there are genuinely unresolved or new issues.
 """
-    print(previous_feedback_section)
 
     prompt = f"""
     You are a strict senior reviewer.
