@@ -261,7 +261,7 @@ elif st.session_state.stage == "complete":
     confidence: float = result.get("confidence_score", 0.0)
 
     if approved:
-        st.success(f"✅ Review complete — approved with {confidence:.0%} confidence")
+        st.success(f"✅ Review complete — approved with {confidence} confidence")
     else:
         st.warning("⚠️ Review complete — max iterations reached without full approval")
 
@@ -269,7 +269,7 @@ elif st.session_state.stage == "complete":
 
     # ── Metrics ───────────────────────────────────────────────────────────────
     m1, m2, m3 = st.columns(3)
-    m1.metric("Confidence Score", f"{confidence:.0%}")
+    m1.metric("Confidence Score", f"{confidence}")
     m2.metric("Iterations Used", result.get("iteration_count", "—"))
     m3.metric("Status", "Approved ✅" if approved else "Stopped ⚠️")
 

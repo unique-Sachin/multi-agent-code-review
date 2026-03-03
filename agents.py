@@ -51,7 +51,6 @@ async def security_agent(state):
 
 async def refactor_agent(state):
     structured_llm = llm.with_structured_output(RefactorOutput)
-    print(state['review_feedback'])
 
     human_feedback_section = ""
     if state.get("human_feedback"):
@@ -68,7 +67,7 @@ async def refactor_agent(state):
 """
 
     prompt = f"""
-    You are a senior software engineer.
+    You are a senior software engineer. Your task is to refactor the given code.
 
     Original Code:
     {state["original_code"]}
@@ -79,13 +78,11 @@ async def refactor_agent(state):
     Security Issues:
     {state["security_report"]}
     {human_feedback_section}{reviewer_feedback_section}
-    Refactor the code to:
-    - Fix all issues
-    - Improve readability
-    - Improve security
-    - Address any human reviewer feedback
-    - Address any automated reviewer feedback
-    - Keep functionality intact
+    Rules:
+    - Return ONLY the refactored source code in `refactored_code`. No markdown fences (no ```), no inline change notes, no explanations inside the code field.
+    - The code must be complete, correct, and immediately executable.
+    - Apply current best practices: fix all reported issues, improve readability and security, keep the original functionality intact.
+    - Put your explanation of changes in `summary` only — never inside `refactored_code`.
     """
 
     result = await structured_llm.ainvoke(prompt)
@@ -133,6 +130,18 @@ async def test_generator_agent(state):
 async def reviewer_agent(state):
     structured_llm = llm.with_structured_output(ReviewOutput)
 
+    previous_feedback_section = ""
+    if state.get("review_feedback"):
+        previous_feedback_section = f"""
+    Your Previous Feedback (from last iteration):
+    {state["review_feedback"]}
+
+    IMPORTANT: The refactor agent has already attempted to address the above feedback.
+    Verify each point specifically — if it has been resolved, do not raise it again.
+    Only reject if there are genuinely unresolved or new issues.
+"""
+    print(previous_feedback_section)
+
     prompt = f"""
     You are a strict senior reviewer.
 
@@ -144,7 +153,7 @@ async def reviewer_agent(state):
 
     Refactored Code:
     {state["refactored_code"]}
-
+    {previous_feedback_section}
     Check:
     - Were all issues fixed?
     - Is the code secure?

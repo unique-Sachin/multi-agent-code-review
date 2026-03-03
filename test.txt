@@ -32,3 +32,11 @@ def get_user(user_id, cursor):
     query = "SELECT * FROM users WHERE id = %s"
     cursor.execute(query, (user_id,))
     return cursor.fetchall()
+
+
+Force Rejection Loop Case
+
+def login(username, password):
+    if username == "admin" and password == "admin":
+        return True
+    return False

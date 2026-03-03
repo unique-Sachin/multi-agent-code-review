@@ -33,7 +33,9 @@ The pipeline follows a fan-out / fan-in graph pattern:
          /       │      \
         /        │       stop (max iterations)
        /         │        
-    approve  retry[refactor] ← loop  
+    approve    retry (with feedback)
+       │          │
+       │     [refactor] ← loop  
        │
       END
 ```
