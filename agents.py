@@ -1,6 +1,8 @@
 from state import ReviewState, ReviewStateUpdate
 from llm import llm
 from models import AnalysisOutput, SecurityOutput, RefactorOutput, ReviewOutput
+from tools import run_bandit
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import interrupt
 
 
@@ -26,27 +28,47 @@ async def analyzer_agent(state: ReviewState) -> ReviewStateUpdate:
     }
 
 
-async def security_agent(state):
-    structured_llm = llm.with_structured_output(SecurityOutput)
-
-    prompt = f"""
-    You are a security expert.
-
-    Analyze the following code for:
-    - SQL injection
-    - Hardcoded secrets
-    - Unsafe eval/exec
-    - Insecure deserialization
-
-    Code:
-    {state["original_code"]}
+async def security_agent(state: ReviewState) -> ReviewStateUpdate:
     """
+    Self-contained tool-calling security agent.
+    """
+    llm_with_tools = llm.bind_tools([run_bandit])
 
-    result = await structured_llm.ainvoke(prompt)
+    # ── Step 1: ask LLM to call run_bandit ────────────────────────────────────
+    user_msg = HumanMessage(
+        content=(
+            "You are a security expert. "
+            "Use the run_bandit tool to scan the following Python code "
+            "for security vulnerabilities:\n\n"
+            f"{state['original_code']}"
+        )
+    )
+    ai_response = await llm_with_tools.ainvoke([user_msg])
 
-    return {
-        "security_report": result.vulnerabilities
-    }
+    # ── Step 2: execute every tool call returned by the LLM ───────────────────
+    tool_messages = []
+    for tool_call in ai_response.tool_calls:
+        bandit_output = run_bandit.invoke(tool_call["args"])
+        tool_messages.append(
+            ToolMessage(content=bandit_output, tool_call_id=tool_call["id"])
+        )
+
+    # ── Step 3: summarise Bandit output into structured SecurityOutput ─────────
+    structured_llm = llm.with_structured_output(SecurityOutput)
+    bandit_text = "\n\n".join(m.content for m in tool_messages) or "No output from Bandit."
+    result = await structured_llm.ainvoke(
+        f"""You are a security expert.
+
+Below is the raw output from the Bandit static security scanner.
+Extract every distinct security issue as a concise, human-readable string.
+Include severity, CWE reference, and a brief description for each finding.
+If there are no issues, return an empty list.
+
+Bandit output:
+{bandit_text}"""
+    )
+
+    return {"security_report": result.vulnerabilities}
 
 
 async def refactor_agent(state):

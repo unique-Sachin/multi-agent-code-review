@@ -17,7 +17,7 @@ def build_graph():
 
     workflow = StateGraph(ReviewState)
 
-    # Add Nodes
+    # ── Nodes ─────────────────────────────────────────────────────────────────
     workflow.add_node("start", start_node)
     workflow.add_node("analyzer", analyzer_agent)
     workflow.add_node("security", security_agent)
@@ -28,16 +28,17 @@ def build_graph():
 
     workflow.set_entry_point("start")
 
-    # FAN OUT (parallel execution)
+    # ── Fan-out: start → analyzer + security (parallel) ───────────────────────
     workflow.add_edge("start", "analyzer")
     workflow.add_edge("start", "security")
 
-    # FAN IN — both branches must complete before refactor runs.
+    # ── Fan-in: BOTH analyzer AND security must complete before refactor ───────
     workflow.add_edge("analyzer", "refactor")
     workflow.add_edge("security", "refactor")
 
     workflow.add_edge("refactor", "human_review")
 
+    # ── Human review decision ─────────────────────────────────────────────────
     workflow.add_conditional_edges(
         "human_review",
         human_router,
@@ -64,7 +65,7 @@ def build_graph():
     return workflow.compile(checkpointer=checkpointer)
 
 
-# ---------- Routers ----------
+# ── Routers ───────────────────────────────────────────────────────────────────
 
 def human_router(state: ReviewState):
     if state["human_approved"]:

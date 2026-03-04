@@ -14,7 +14,7 @@ The pipeline follows a fan-out / fan-in graph pattern:
               └──────┬──────┘
           ┌──────────┴──────────┐
           ▼                     ▼
-    [analyzer]             [security]        ← parallel
+    [analyzer]             [security] (Toolcall - Bandit static security suite)        ← parallel
           └──────────┬──────────┘
                      ▼
                 [refactor]

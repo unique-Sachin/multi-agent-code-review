@@ -8,3 +8,4 @@ langchain-openai
 streamlit
 fastapi
 uvicorn[standard]
+bandit

@@ -15,16 +15,12 @@ async def main():
     thread_config: RunnableConfig = {"configurable": {"thread_id": "review-session-1"}}
 
     initial_state: ReviewState = {
-        "original_code": """def process(data):
-    if data:
-        if isinstance(data, dict):
-            if "value" in data:
-                if data["value"] > 0:
-                    print("Valid")
-                else:
-                    print("Invalid")""",
+        "original_code": """import subprocess
+subprocess.call(input(), shell=True) 
+password="secret123" """,
         "analysis_report": [],
         "security_report": [],
+        "security_messages": [],
         "refactored_code": "",
         "changes_summary": "",
         "human_approved": None,
@@ -70,6 +66,7 @@ async def main():
         for issue in payload.get("analysis_report", []):
             print(f"  • {issue}")
         print("\n--- Security Report ---")
+        print(payload.get("security_report", []))
         for vuln in payload.get("security_report", []):
             print(f"  • {vuln}")
 

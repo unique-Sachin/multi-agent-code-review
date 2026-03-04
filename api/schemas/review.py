@@ -36,15 +36,8 @@ class ResultPayload(BaseModel):
 class StateResponse(BaseModel):
     """Unified response shape for all review endpoints."""
     thread_id: str
-    # running        → agents are executing in the background
-    # awaiting_review → graph paused at human_review interrupt
-    # complete        → graph finished (approved or max iterations reached)
-    # error           → an unhandled exception occurred during execution
     stage: Literal["running", "awaiting_review", "complete", "error"]
     iteration_count: int
-    # Present only when stage == "awaiting_review"
     interrupt_payload: Optional[InterruptPayload] = None
-    # Present only when stage == "complete"
     result: Optional[ResultPayload] = None
-    # Present only when stage == "error"
     error: Optional[str] = None

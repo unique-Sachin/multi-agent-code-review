@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
+from langgraph.errors import GraphInterrupt
 
 from graph import build_graph
 from state import ReviewState
@@ -9,13 +10,6 @@ from api.schemas.review import StateResponse, InterruptPayload, ResultPayload
 
 _graph = None
 
-# ---------------------------------------------------------------------------
-# In-memory session tracker
-# Tracks threads that are actively running or have errored.
-# { thread_id: ("running" | "error", error_message_or_None) }
-# When a thread finishes successfully it is removed — get_state then falls
-# through to the LangGraph checkpoint to determine the real stage.
-# ---------------------------------------------------------------------------
 _sessions: dict[str, tuple[str, str | None]] = {}
 
 
@@ -83,7 +77,10 @@ async def _run_and_track(coro, thread_id: str) -> None:
     """
     try:
         await coro
-        _sessions.pop(thread_id, None)  # success — let get_state hit LangGraph
+        _sessions.pop(thread_id, None)
+    except GraphInterrupt:
+        # Graph hit an interrupt mid-resume — treat as a normal pause
+        _sessions.pop(thread_id, None)
     except Exception as exc:
         _sessions[thread_id] = ("error", str(exc))
 

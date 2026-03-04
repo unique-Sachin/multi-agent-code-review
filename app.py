@@ -1,14 +1,10 @@
-from dotenv import load_dotenv
-load_dotenv()
-
-import streamlit as st
-import asyncio
+import time
 import json
-import uuid
-from langchain_core.runnables import RunnableConfig
-from langgraph.types import Command
-from graph import build_graph
-from state import ReviewState
+import os
+import requests
+import streamlit as st
+
+BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -17,54 +13,68 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── API helpers ───────────────────────────────────────────────────────────────
 
-@st.cache_resource
-def get_app():
-    """Build and cache the compiled LangGraph app across all reruns."""
-    return build_graph()
-
-
-def run_async(coro):
-    return asyncio.run(coro)
-
-
-def thread_config() -> RunnableConfig:
-    return {"configurable": {"thread_id": st.session_state.thread_id}}
+def api_start(code: str, max_iterations: int) -> dict:
+    resp = requests.post(
+        f"{BASE_URL}/api/review/start",
+        json={"code": code, "max_iterations": max_iterations},
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
-def finish_after_resume():
-    """
-    After resuming from an interrupt, check if the graph paused again
-    (another review cycle) or finished. Update session state accordingly.
-    """
-    graph_state = run_async(app.aget_state(thread_config()))
+def api_get_state(thread_id: str) -> dict:
+    resp = requests.get(f"{BASE_URL}/api/review/{thread_id}/state")
+    resp.raise_for_status()
+    return resp.json()
 
-    if graph_state.next:
-        interrupts = [t.interrupts for t in graph_state.tasks if t.interrupts]
-        if interrupts:
-            st.session_state.interrupt_payload = interrupts[0][0].value
-            st.session_state.iteration_count = graph_state.values.get("iteration_count", 0)
-            st.session_state.stage = "awaiting_review"
-        else:
-            st.session_state.result = graph_state.values
-            st.session_state.stage = "complete"
-    else:
-        st.session_state.result = graph_state.values
+
+def api_decision(thread_id: str, approved: bool, feedback: str | None) -> dict:
+    resp = requests.post(
+        f"{BASE_URL}/api/review/{thread_id}/decision",
+        json={"approved": approved, "feedback": feedback},
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def poll_until_ready(thread_id: str, poll_interval: float = 2.0, timeout: int = 180) -> dict:
+    """Poll GET /state until stage is no longer 'running'. Returns the final state dict."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        data = api_get_state(thread_id)
+        if data["stage"] != "running":
+            return data
+        time.sleep(poll_interval)
+    raise TimeoutError(f"Pipeline timed out after {timeout}s")
+
+
+def apply_state(data: dict):
+    """Write an API state response into Streamlit session state."""
+    stage = data["stage"]
+    st.session_state.iteration_count = data.get("iteration_count", 0)
+    if stage == "awaiting_review":
+        st.session_state.interrupt_payload = data.get("interrupt_payload") or {}
+        st.session_state.stage = "awaiting_review"
+    elif stage == "complete":
+        st.session_state.result = data.get("result") or {}
         st.session_state.stage = "complete"
-
-    st.rerun()
+    elif stage == "error":
+        st.session_state.error_message = data.get("error", "Unknown error")
+        st.session_state.stage = "error"
 
 
 # ── Session state defaults ────────────────────────────────────────────────────
 
 def init_session():
     defaults = {
-        "stage": "input",       # input | awaiting_review | complete
-        "thread_id": str(uuid.uuid4()),
+        "stage": "input",       # input | awaiting_review | complete | error
+        "thread_id": None,
         "interrupt_payload": None,
         "result": None,
         "iteration_count": 0,
+        "error_message": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -72,7 +82,6 @@ def init_session():
 
 
 init_session()
-app = get_app()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
@@ -85,16 +94,17 @@ with st.sidebar:
         "input": "⬜ Waiting for input",
         "awaiting_review": "🟡 Awaiting human review",
         "complete": "🟢 Complete",
+        "error": "🔴 Error",
     }
     st.write("**Status**")
     st.write(stage_labels.get(st.session_state.stage, ""))
 
-    if st.session_state.stage != "input":
+    if st.session_state.stage != "input" and st.session_state.thread_id:
         st.divider()
         st.metric("Iterations", st.session_state.iteration_count)
         st.caption(f"Thread `{st.session_state.thread_id[:8]}…`")
 
-    if st.session_state.stage in ("awaiting_review", "complete"):
+    if st.session_state.stage in ("awaiting_review", "complete", "error"):
         st.divider()
         if st.button("🔄 New Review", use_container_width=True):
             for key in list(st.session_state.keys()):
@@ -128,40 +138,16 @@ if st.session_state.stage == "input":
     )
 
     if st.session_state.get("start_btn") and code_input.strip():
-        initial_state: ReviewState = {
-            "original_code": code_input.strip(),
-            "analysis_report": [],
-            "security_report": [],
-            "refactored_code": "",
-            "changes_summary": "",
-            "human_approved": None,
-            "human_feedback": None,
-            "test_cases": "",
-            "approved": False,
-            "review_feedback": "",
-            "confidence_score": 0.0,
-            "iteration_count": 0,
-            "max_iterations": max_iter,
-        }
-
-        with st.spinner("Running analysis, security scan, and refactor in parallel…"):
-            run_async(app.ainvoke(initial_state, config=thread_config()))
-
-        graph_state = run_async(app.aget_state(thread_config()))
-
-        if graph_state.next:
-            interrupts = [t.interrupts for t in graph_state.tasks if t.interrupts]
-            if interrupts:
-                st.session_state.interrupt_payload = interrupts[0][0].value
-                st.session_state.iteration_count = graph_state.values.get("iteration_count", 0)
-                st.session_state.stage = "awaiting_review"
-            else:
-                st.session_state.result = graph_state.values
-                st.session_state.stage = "complete"
-        else:
-            st.session_state.result = graph_state.values
-            st.session_state.stage = "complete"
-
+        try:
+            with st.spinner("Starting review pipeline…"):
+                start_data = api_start(code_input.strip(), max_iter)
+                st.session_state.thread_id = start_data["thread_id"]
+            with st.spinner("Running analysis, security scan, and refactor in parallel…"):
+                final_data = poll_until_ready(st.session_state.thread_id)
+            apply_state(final_data)
+        except Exception as e:
+            st.session_state.stage = "error"
+            st.session_state.error_message = str(e)
         st.rerun()
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -170,6 +156,7 @@ if st.session_state.stage == "input":
 
 elif st.session_state.stage == "awaiting_review":
     payload: dict = st.session_state.interrupt_payload or {}
+    thread_id: str = st.session_state.thread_id
 
     st.title("👤 Human Review")
     st.info(
@@ -226,12 +213,16 @@ elif st.session_state.stage == "awaiting_review":
 
     with col_approve:
         if st.button("✅ Approve", type="primary", use_container_width=True):
-            with st.spinner("Resuming pipeline…"):
-                run_async(app.ainvoke(
-                    Command(resume={"approved": True, "feedback": None}),
-                    config=thread_config(),
-                ))
-            finish_after_resume()
+            try:
+                with st.spinner("Resuming pipeline…"):
+                    api_decision(thread_id, approved=True, feedback=None)
+                with st.spinner("Reviewer is checking the refactored code…"):
+                    final_data = poll_until_ready(thread_id)
+                apply_state(final_data)
+            except Exception as e:
+                st.session_state.stage = "error"
+                st.session_state.error_message = str(e)
+            st.rerun()
 
     with col_reject:
         reject_disabled = not (feedback_text or "").strip()
@@ -240,12 +231,16 @@ elif st.session_state.stage == "awaiting_review":
             use_container_width=True,
             disabled=reject_disabled,
         ):
-            with st.spinner("Sending feedback and re-running refactor…"):
-                run_async(app.ainvoke(
-                    Command(resume={"approved": False, "feedback": feedback_text.strip()}),
-                    config=thread_config(),
-                ))
-            finish_after_resume()
+            try:
+                with st.spinner("Sending feedback and re-running refactor…"):
+                    api_decision(thread_id, approved=False, feedback=feedback_text.strip())
+                with st.spinner("Refactoring in progress…"):
+                    final_data = poll_until_ready(thread_id)
+                apply_state(final_data)
+            except Exception as e:
+                st.session_state.stage = "error"
+                st.session_state.error_message = str(e)
+            st.rerun()
 
     if reject_disabled:
         st.caption("Add feedback above to enable rejection.")
@@ -303,3 +298,11 @@ elif st.session_state.stage == "complete":
         file_name="output.json",
         mime="application/json",
     )
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE ERROR
+# ═════════════════════════════════════════════════════════════════════════════
+
+elif st.session_state.stage == "error":
+    st.error(f"🔴 Pipeline error: {st.session_state.error_message}")
+    st.caption("Use the **🔄 New Review** button in the sidebar to start again.")
