@@ -1,5 +1,4 @@
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 from state import ReviewState
 from agents import (
     analyzer_agent,
@@ -13,7 +12,7 @@ from agents import (
 def start_node(state: ReviewState):
     return state
 
-def build_graph():
+def build_graph(checkpointer=None):
 
     workflow = StateGraph(ReviewState)
 
@@ -60,8 +59,11 @@ def build_graph():
         }
     )
 
-    # MemorySaver checkpointer is required for interrupt() to persist state
-    checkpointer = MemorySaver()
+    # Checkpointer is required for interrupt() to persist state.
+    # Falls back to in-memory MemorySaver when none is provided (e.g. tests/CLI).
+    if checkpointer is None:
+        from langgraph.checkpoint.memory import MemorySaver
+        checkpointer = MemorySaver()
     return workflow.compile(checkpointer=checkpointer)
 
 

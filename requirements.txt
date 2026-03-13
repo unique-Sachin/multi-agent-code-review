@@ -9,3 +9,5 @@ streamlit
 fastapi
 uvicorn[standard]
 bandit
+azure-cosmos
+aiohttp

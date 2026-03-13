@@ -4,20 +4,20 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 from langgraph.errors import GraphInterrupt
 
-from graph import build_graph
 from state import ReviewState
 from api.schemas.review import StateResponse, InterruptPayload, ResultPayload
+from db import sessions as sessions_db
 
 _graph = None
+_sessions_container = None
 
-_sessions: dict[str, tuple[str, str | None]] = {}
 
-
-def get_graph():
-    global _graph
-    if _graph is None:
-        _graph = build_graph()
-    return _graph
+def init(graph, sessions_container) -> None:
+    """Called once from the FastAPI lifespan to inject the compiled graph
+    and the Cosmos DB sessions container."""
+    global _graph, _sessions_container
+    _graph = graph
+    _sessions_container = sessions_container
 
 
 def _thread_config(thread_id: str) -> RunnableConfig:
@@ -72,17 +72,17 @@ def _build_response(thread_id: str, graph_state) -> StateResponse:
 async def _run_and_track(coro, thread_id: str) -> None:
     """
     Background task wrapper. Awaits the graph coroutine, then removes the
-    'running' marker so subsequent get_state calls read from the checkpoint.
-    Sets 'error' state if an exception is raised.
+    'running' session record so subsequent get_state calls read from the
+    LangGraph checkpoint. Writes an 'error' record if an exception is raised.
     """
     try:
         await coro
-        _sessions.pop(thread_id, None)
+        await sessions_db.delete_session(_sessions_container, thread_id)
     except GraphInterrupt:
         # Graph hit an interrupt mid-resume — treat as a normal pause
-        _sessions.pop(thread_id, None)
+        await sessions_db.delete_session(_sessions_container, thread_id)
     except Exception as exc:
-        _sessions[thread_id] = ("error", str(exc))
+        await sessions_db.upsert_session(_sessions_container, thread_id, "error", str(exc))
 
 
 async def start_review(code: str, max_iterations: int) -> StateResponse:
@@ -90,7 +90,6 @@ async def start_review(code: str, max_iterations: int) -> StateResponse:
     Create a new review session and immediately return { stage: 'running' }.
     The pipeline runs in a background asyncio task.
     """
-    graph = get_graph()
     thread_id = str(uuid.uuid4())
     config = _thread_config(thread_id)
 
@@ -110,9 +109,9 @@ async def start_review(code: str, max_iterations: int) -> StateResponse:
         "max_iterations": max_iterations,
     }
 
-    _sessions[thread_id] = ("running", None)
+    await sessions_db.upsert_session(_sessions_container, thread_id, "running")
     asyncio.create_task(
-        _run_and_track(graph.ainvoke(initial_state, config=config), thread_id)
+        _run_and_track(_graph.ainvoke(initial_state, config=config), thread_id)
     )
 
     return StateResponse(thread_id=thread_id, stage="running", iteration_count=0)
@@ -121,22 +120,20 @@ async def start_review(code: str, max_iterations: int) -> StateResponse:
 async def get_state(thread_id: str) -> StateResponse:
     """
     Return the current state of a session.
-    - 'running' / 'error' come from the in-memory tracker.
-    - 'awaiting_review' / 'complete' come from the LangGraph checkpoint.
+    - 'running' / 'error' are read from the Cosmos DB sessions container.
+    - 'awaiting_review' / 'complete' are derived from the LangGraph checkpoint.
     """
-    session = _sessions.get(thread_id)
+    session = await sessions_db.get_session(_sessions_container, thread_id)
     if session is not None:
-        stage, error_msg = session
         return StateResponse(
             thread_id=thread_id,
-            stage=stage,
+            stage=session["stage"],
             iteration_count=0,
-            error=error_msg,
+            error=session.get("error_msg"),
         )
 
-    graph = get_graph()
     config = _thread_config(thread_id)
-    graph_state = await graph.aget_state(config)
+    graph_state = await _graph.aget_state(config)
     return _build_response(thread_id, graph_state)
 
 
@@ -147,13 +144,12 @@ async def submit_decision(
     Resume the graph from the human_review interrupt and immediately return
     { stage: 'running' }. The resumed pipeline runs in a background task.
     """
-    graph = get_graph()
     config = _thread_config(thread_id)
 
-    _sessions[thread_id] = ("running", None)
+    await sessions_db.upsert_session(_sessions_container, thread_id, "running")
     asyncio.create_task(
         _run_and_track(
-            graph.ainvoke(
+            _graph.ainvoke(
                 Command(resume={
                     "approved": approved,
                     "feedback": feedback if not approved else None,

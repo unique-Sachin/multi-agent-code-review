@@ -6,14 +6,30 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routers.review import router as review_router
-from api.services.review import get_graph
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Warm up the LangGraph compiled app at startup so the first request isn't slow."""
-    get_graph()
-    yield
+    """
+    Startup: initialise Azure Cosmos DB, build the LangGraph compiled app with
+    the Cosmos DB checkpointer, and inject both into the review service.
+    Shutdown: close the Cosmos DB client cleanly.
+    """
+    from azure.cosmos.aio import CosmosClient
+    from db.cosmos import COSMOS_ENDPOINT, COSMOS_KEY, init_containers
+    from db.checkpointer import AsyncCosmosDBSaver
+    from graph import build_graph
+    from api.services import review as review_service
+
+    client = CosmosClient(url=COSMOS_ENDPOINT, credential=COSMOS_KEY)
+    try:
+        cp_container, wr_container, sessions_container = await init_containers(client)
+        checkpointer = AsyncCosmosDBSaver(cp_container, wr_container)
+        graph = build_graph(checkpointer=checkpointer)
+        review_service.init(graph, sessions_container)
+        yield
+    finally:
+        await client.close()
 
 
 app = FastAPI(
