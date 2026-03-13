@@ -1,6 +1,11 @@
 from fastapi import APIRouter, HTTPException
 
-from api.schemas.review import StartRequest, DecisionRequest, StateResponse
+from api.schemas.review import (
+    StartRequest,
+    DecisionRequest,
+    StateResponse,
+    SessionHistoryListResponse,
+)
 from api.services import review as review_service
 
 router = APIRouter(prefix="/api/review", tags=["review"])
@@ -89,3 +94,17 @@ async def get_result(thread_id: str):
     if state.stage == "awaiting_review":
         raise HTTPException(status_code=409, detail="Review is awaiting human decision")
     return state
+
+
+@router.get(
+    "/sessions",
+    response_model=SessionHistoryListResponse,
+    summary="List previous review sessions",
+    description="Returns durable history records ordered by most recently updated.",
+)
+async def list_sessions(limit: int = 30):
+    items = await review_service.list_sessions(limit=limit)
+    return SessionHistoryListResponse(items=items)
+
+
+

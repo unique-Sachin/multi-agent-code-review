@@ -39,6 +39,13 @@ def api_decision(thread_id: str, approved: bool, feedback: str | None) -> dict:
     return resp.json()
 
 
+def api_list_sessions(limit: int = 30) -> list[dict]:
+    resp = requests.get(f"{BASE_URL}/api/review/sessions", params={"limit": limit})
+    resp.raise_for_status()
+    payload = resp.json()
+    return payload.get("items", [])
+
+
 def poll_until_ready(thread_id: str, poll_interval: float = 2.0, timeout: int = 180) -> dict:
     """Poll GET /state until stage is no longer 'running'. Returns the final state dict."""
     deadline = time.time() + timeout
@@ -103,6 +110,34 @@ with st.sidebar:
         st.divider()
         st.metric("Iterations", st.session_state.iteration_count)
         st.caption(f"Thread `{st.session_state.thread_id[:8]}…`")
+
+    st.divider()
+    st.write("**Previous Sessions**")
+    try:
+        previous_sessions = api_list_sessions(limit=20)
+    except Exception:
+        previous_sessions = []
+
+    if not previous_sessions:
+        st.caption("No previous sessions found.")
+    else:
+        for item in previous_sessions:
+            thread_id = item.get("thread_id", "")
+            status = item.get("status", "running")
+            code_preview = item.get("code_preview", "")
+            label = f"{status} · {thread_id[:8]}"
+            if st.button(label, key=f"open_{thread_id}", use_container_width=True):
+                try:
+                    data = api_get_state(thread_id)
+                    st.session_state.thread_id = thread_id
+                    apply_state(data)
+                    st.rerun()
+                except Exception as exc:
+                    st.session_state.stage = "error"
+                    st.session_state.error_message = str(exc)
+                    st.rerun()
+            if code_preview:
+                st.caption(code_preview)
 
     if st.session_state.stage in ("awaiting_review", "complete", "error"):
         st.divider()

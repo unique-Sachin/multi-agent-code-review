@@ -23,10 +23,10 @@ async def lifespan(app: FastAPI):
 
     client = CosmosClient(url=COSMOS_ENDPOINT, credential=COSMOS_KEY)
     try:
-        cp_container, wr_container, sessions_container = await init_containers(client)
+        cp_container, wr_container, sessions_container, history_container = await init_containers(client)
         checkpointer = AsyncCosmosDBSaver(cp_container, wr_container)
         graph = build_graph(checkpointer=checkpointer)
-        review_service.init(graph, sessions_container)
+        review_service.init(graph, sessions_container, history_container)
         yield
     finally:
         await client.close()

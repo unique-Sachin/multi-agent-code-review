@@ -41,3 +41,13 @@ class StateResponse(BaseModel):
     interrupt_payload: Optional[InterruptPayload] = None
     result: Optional[ResultPayload] = None
     error: Optional[str] = None
+
+
+class SessionHistoryItem(BaseModel):
+    thread_id: str
+    status: Literal["running", "awaiting_review", "complete", "error"]
+    code_preview: str = ""
+
+
+class SessionHistoryListResponse(BaseModel):
+    items: List[SessionHistoryItem]

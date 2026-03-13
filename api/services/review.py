@@ -5,19 +5,26 @@ from langgraph.types import Command
 from langgraph.errors import GraphInterrupt
 
 from state import ReviewState
-from api.schemas.review import StateResponse, InterruptPayload, ResultPayload
+from api.schemas.review import (
+    StateResponse,
+    InterruptPayload,
+    ResultPayload,
+    SessionHistoryItem,
+)
 from db import sessions as sessions_db
+from db import history as history_db
 
 _graph = None
 _sessions_container = None
+_history_container = None
 
 
-def init(graph, sessions_container) -> None:
-    """Called once from the FastAPI lifespan to inject the compiled graph
-    and the Cosmos DB sessions container."""
-    global _graph, _sessions_container
+def init(graph, sessions_container, history_container) -> None:
+    """Called once from FastAPI lifespan to inject runtime dependencies."""
+    global _graph, _sessions_container, _history_container
     _graph = graph
     _sessions_container = sessions_container
+    _history_container = history_container
 
 
 def _thread_config(thread_id: str) -> RunnableConfig:
@@ -49,7 +56,6 @@ def _build_response(thread_id: str, graph_state) -> StateResponse:
                 interrupt_payload=payload,
             )
 
-    # Graph finished — surface the final values
     values = graph_state.values
     result = ResultPayload(
         approved=values.get("approved", False),
@@ -71,18 +77,25 @@ def _build_response(thread_id: str, graph_state) -> StateResponse:
 
 async def _run_and_track(coro, thread_id: str) -> None:
     """
-    Background task wrapper. Awaits the graph coroutine, then removes the
-    'running' session record so subsequent get_state calls read from the
-    LangGraph checkpoint. Writes an 'error' record if an exception is raised.
+    Background task wrapper. Removes the transient running/error session record
+    after the pipeline finishes and writes the final status to review_history.
     """
     try:
         await coro
         await sessions_db.delete_session(_sessions_container, thread_id)
+
+        config = _thread_config(thread_id)
+        graph_state = await _graph.aget_state(config)
+        response = _build_response(thread_id, graph_state)
+        # Determine final status: awaiting_review (interrupt) or complete
+        final_status = response.stage if response.stage in ("awaiting_review", "complete") else "complete"
+        await history_db.update_history(_history_container, thread_id, final_status)
     except GraphInterrupt:
-        # Graph hit an interrupt mid-resume — treat as a normal pause
         await sessions_db.delete_session(_sessions_container, thread_id)
+        await history_db.update_history(_history_container, thread_id, "awaiting_review")
     except Exception as exc:
         await sessions_db.upsert_session(_sessions_container, thread_id, "error", str(exc))
+        await history_db.update_history(_history_container, thread_id, "error")
 
 
 async def start_review(code: str, max_iterations: int) -> StateResponse:
@@ -110,6 +123,8 @@ async def start_review(code: str, max_iterations: int) -> StateResponse:
     }
 
     await sessions_db.upsert_session(_sessions_container, thread_id, "running")
+    await history_db.create_history(_history_container, thread_id, code)
+
     asyncio.create_task(
         _run_and_track(_graph.ainvoke(initial_state, config=config), thread_id)
     )
@@ -147,6 +162,8 @@ async def submit_decision(
     config = _thread_config(thread_id)
 
     await sessions_db.upsert_session(_sessions_container, thread_id, "running")
+    await history_db.update_history(_history_container, thread_id, "running")
+
     asyncio.create_task(
         _run_and_track(
             _graph.ainvoke(
@@ -161,3 +178,18 @@ async def submit_decision(
     )
 
     return StateResponse(thread_id=thread_id, stage="running", iteration_count=0)
+
+
+async def list_sessions(limit: int = 30) -> list[SessionHistoryItem]:
+    docs = await history_db.list_history(_history_container, limit=limit)
+    return [
+        SessionHistoryItem(
+            thread_id=doc.get("thread_id", ""),
+            status=doc.get("status", "running"),
+            code_preview=doc.get("code_preview", ""),
+        )
+        for doc in docs
+    ]
+
+
+
